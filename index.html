@@ -797,16 +797,29 @@ function showErr() {
   $('eClose').onclick = closePlayer;
 }
 function diagnose(f, fmtMsg) {
-  fetch(mediaUrl(f.id), { headers: { Range: 'bytes=0-1' } }).then(function (r) {
-    if (r.ok) return fmtMsg;
-    return r.text().then(function (t) {
-      var reason = ''; try { var j = JSON.parse(t); reason = (j.error.errors[0].reason || '') + ' ' + (j.error.message || ''); } catch (e) {}
-      if (/quota|rate|limit/i.test(reason)) return 'Google is limiting downloads of this file right now (too many plays). Wait a few hours, or make a copy of the file in Drive and play the copy.';
-      if (r.status === 404 || /notFound|permission/i.test(reason)) return 'Google says this file isn\'t shared publicly. Share it (or its folder) as "Anyone with the link".';
-      return 'Google returned an error (' + r.status + '): ' + esc(reason || 'unknown') ;
-    });
-  }).catch(function () { return 'Couldn\'t reach Google Drive. Check the Wi-Fi connection.'; })
-  .then(function (txt) { var el = $('eDiag'); if (el && P.f === f) el.innerHTML = txt; });
+  var code = vid.error ? vid.error.code : 0;
+  var tag = ' <span style="color:#777;font-size:12px">[video error ' + code + ']</span>';
+  function done(txt) { var el = $('eDiag'); if (el && P.f === f) el.innerHTML = txt + tag; }
+  var x = new XMLHttpRequest(), finished = false;
+  x.open('GET', mediaUrl(f.id), true);
+  x.onreadystatechange = function () {
+    if (finished) return;
+    if (x.readyState === 2 || x.readyState === 3) {
+      if (x.status === 200 || x.status === 206) { finished = true; try { x.abort(); } catch (e) {} done(fmtMsg); }
+      return;
+    }
+    if (x.readyState !== 4) return;
+    finished = true;
+    var st = x.status, reason = '', gm = '';
+    try { var j = JSON.parse(x.responseText); reason = j.error.errors[0].reason || ''; gm = j.error.message || ''; } catch (e) {}
+    if (st === 0) return done('The video request was blocked or timed out. Try again in a minute. If it keeps happening, tell me this message.');
+    if (/quota|rate|limit/i.test(reason + gm) || st === 429) return done('Google is limiting downloads of this file right now (' + esc(reason || st) + '). Wait an hour or two, or make a copy of the file in Drive and play the copy.');
+    if (st === 404 || /notFound|permission|forbidden/i.test(reason)) return done('Google says this file isn\'t shared publicly (' + esc(reason || st) + '). Share it (or its folder) as "Anyone with the link".');
+    done('Google returned error ' + st + ': ' + esc(reason + ' ' + gm));
+  };
+  x.onerror = function () { if (!finished) { finished = true; done('The video request was blocked (network error). Try again in a minute. If it keeps happening, tell me this message.'); } };
+  setTimeout(function () { if (!finished) { finished = true; try { x.abort(); } catch (e) {} done('Google Drive is responding very slowly. Check the Wi-Fi and try again.'); } }, 15000);
+  x.send();
 }
 function hideErr() { $('perr').className = 'perr'; }
 
@@ -1069,7 +1082,7 @@ document.addEventListener('visibilitychange', function () { if (document.hidden)
 window.addEventListener('pagehide', function () { savePos(true); });
 
 /* ---------- version / update ---------- */
-var APP_VERSION = '4';
+var APP_VERSION = '5';
 $('verLbl').textContent = APP_VERSION;
 $('updBtn').onclick = function () {
   $('setMsg').innerHTML = 'Reloading the latest version…';

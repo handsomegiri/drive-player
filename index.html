@@ -7,6 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Drive Player">
 <meta name="theme-color" content="#000000">
+<meta http-equiv="Cache-Control" content="no-cache">
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="icon" href="icon.png">
 <title>Drive Player</title>
@@ -199,7 +200,9 @@ video::cue{background:rgba(0,0,0,.6);font-size:22px}
 
     <button id="saveBtn" class="btn pri">Save &amp; open library</button>
     <button id="clearHist" class="btn wide">Clear watch history</button>
-    <div class="hint" style="margin-top:20px">Plays <b>MP4 / MOV / M4V</b> (H.264). MKV, AVI and WMV files aren't supported by Safari on iPad, so convert them to MP4 first.</div>
+    <button id="updBtn" class="btn wide">Check for app update</button>
+    <div class="hint" style="margin-top:20px">App version: <b id="verLbl"></b></div>
+    <div class="hint" style="margin-top:8px">Plays <b>MP4 / MOV / M4V</b> (H.264). MKV, AVI and WMV files aren't supported by Safari on iPad, so convert them to MP4 first.</div>
   </div>
 </div>
 
@@ -369,7 +372,7 @@ function api(path, params) {
   });
 }
 function mediaUrl(id) {
-  return API + 'files/' + encodeURIComponent(id) + '?alt=media&supportsAllDrives=true&key=' + encodeURIComponent(cfg.apiKey);
+  return API + 'files/' + encodeURIComponent(id) + '?alt=media&supportsAllDrives=true&key=' + encodeURIComponent(cfg.apiKey) + '&quotaUser=dp' + Date.now().toString(36) + Math.floor(Math.random() * 1e6);
 }
 function thumbUrl(id) { return 'https://drive.google.com/thumbnail?sz=w480&id=' + encodeURIComponent(id); }
 
@@ -383,7 +386,7 @@ function loadFolder(id, force) {
   function page(tok) {
     var p = {
       q: "'" + id + "' in parents and trashed=false",
-      fields: 'nextPageToken,files(id,name,mimeType,size,modifiedTime,thumbnailLink,videoMediaMetadata(durationMillis))',
+      fields: 'nextPageToken,files(id,name,mimeType,size,modifiedTime,thumbnailLink,videoMediaMetadata(durationMillis,width,height))',
       pageSize: 1000, supportsAllDrives: true, includeItemsFromAllDrives: true
     };
     if (tok) p.pageToken = tok;
@@ -640,6 +643,17 @@ $('clearHist').onclick = function () {
 /* ---------- player ---------- */
 var vid = $('vid'), player = $('player'), ui = $('ui');
 var P = { list: [], i: 0, f: null, folder: null, subs: [], locked: false, scale: 1, bright: cfg.bright, rate: 1, uiOn: true, lastSave: 0, hideT: 0 };
+var vidEvents = {};
+function on(name, fn) { vidEvents[name] = fn; vid.addEventListener(name, fn); }
+function freshVideo() {
+  var old = vid, nv = old.cloneNode(false);
+  Object.keys(vidEvents).forEach(function (k) { old.removeEventListener(k, vidEvents[k]); nv.addEventListener(k, vidEvents[k]); });
+  nv.removeAttribute('src');
+  try { old.pause(); } catch (e) {}
+  old.removeAttribute('src'); try { old.load(); } catch (e) {}
+  old.parentNode.replaceChild(nv, old);
+  vid = nv; vid.loop = !!P.loop;
+}
 var RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 var ASPECTS = [['contain', 'Fit', 'Fit to screen'], ['cover', 'Fill', 'Fill screen (crops edges)'], ['fill', 'Stretch', 'Stretch to screen'], ['none', '100%', 'Original size']];
 
@@ -672,8 +686,8 @@ function openPlayer(list, i, folder, subs) {
 function playIdx(i) {
   P.i = i; var f = P.list[i]; P.f = f;
   hideErr(); spin(true); hideToast();
-  var tracks = vid.querySelectorAll('track');
-  for (var k = 0; k < tracks.length; k++) vid.removeChild(tracks[k]);
+  freshVideo();
+  P.retries = 0; P.resumeAt = 0; P.lastTime = 0;
   $('pTitle').textContent = f.name;
   P.resumeChecked = false;
   vid.src = mediaUrl(f.id);
@@ -690,7 +704,8 @@ function playIdx(i) {
 
 function closePlayer() {
   savePos(true);
-  vid.pause(); vid.removeAttribute('src'); try { vid.load(); } catch (e) {}
+  freshVideo();
+  P.f = null;
   player.className = '';
   if (document.webkitFullscreenElement && document.webkitExitFullscreen) { try { document.webkitExitFullscreen(); } catch (e) {} }
   if (cur && stack.length) drawFolder();
@@ -763,16 +778,35 @@ function hideToast() { $('toast').className = ''; }
 function showErr() {
   spin(false);
   var f = P.f;
+  var m = f && f.videoMediaMetadata;
+  var res = m && m.width ? m.width + '×' + m.height : '';
+  var big = m && m.width && Math.max(+m.width, +m.height) > 1920;
+  var fmtMsg = 'The file downloads fine, but this iPad can\'t decode it' +
+    (res ? ' (' + res + (big ? ', which is larger than this iPad can play' : '') + ')' : '') +
+    '. It\'s probably HEVC/H.265, AV1 or VP9, or over 1080p. Convert it with HandBrake using the preset <b>"Fast 1080p30"</b> (H.264), then upload the new file.';
   var msg = f && f.ok === false
     ? 'Safari on iPad can\'t play this file type (' + esc((f.name.match(/\.[^.]+$/) || ['?'])[0]) + '). Convert it to MP4 (H.264).'
-    : 'This video couldn\'t be loaded. Check the file is shared as "Anyone with the link". If it still fails, Google may be limiting downloads, so try again later.';
+    : '<span id="eDiag">Checking why…</span>';
+  if (f && f.ok !== false) diagnose(f, fmtMsg);
   $('perr').innerHTML = '<p>' + msg + '</p><button class="btn" id="eRetry">Try again</button>' +
     (P.i < P.list.length - 1 ? '<button class="btn" id="eNext">Next video</button>' : '') +
     '<button class="btn" id="eClose">Close</button>';
   $('perr').className = 'perr on';
-  $('eRetry').onclick = function () { playIdx(P.i); };
+  $('eRetry').onclick = function () { hideErr(); P.retries = 0; reloadCurrent(P.lastTime || 0); };
   if ($('eNext')) $('eNext').onclick = function () { playIdx(P.i + 1); };
   $('eClose').onclick = closePlayer;
+}
+function diagnose(f, fmtMsg) {
+  fetch(mediaUrl(f.id), { headers: { Range: 'bytes=0-1' } }).then(function (r) {
+    if (r.ok) return fmtMsg;
+    return r.text().then(function (t) {
+      var reason = ''; try { var j = JSON.parse(t); reason = (j.error.errors[0].reason || '') + ' ' + (j.error.message || ''); } catch (e) {}
+      if (/quota|rate|limit/i.test(reason)) return 'Google is limiting downloads of this file right now (too many plays). Wait a few hours, or make a copy of the file in Drive and play the copy.';
+      if (r.status === 404 || /notFound|permission/i.test(reason)) return 'Google says this file isn\'t shared publicly. Share it (or its folder) as "Anyone with the link".';
+      return 'Google returned an error (' + r.status + '): ' + esc(reason || 'unknown') ;
+    });
+  }).catch(function () { return 'Couldn\'t reach Google Drive. Check the Wi-Fi connection.'; })
+  .then(function (txt) { var el = $('eDiag'); if (el && P.f === f) el.innerHTML = txt; });
 }
 function hideErr() { $('perr').className = 'perr'; }
 
@@ -802,10 +836,11 @@ seek.addEventListener('mousedown', function (e) {
 });
 
 /* video events */
-vid.addEventListener('loadedmetadata', function () {
+on('loadedmetadata', function () {
   $('pDur').textContent = fmt(vid.duration);
   if (P.f && isFinite(vid.duration)) { durMap[P.f.id] = vid.duration; LS.set('dur', durMap); }
   vid.playbackRate = P.rate; vid.defaultPlaybackRate = P.rate;
+  if (P.resumeAt > 0) { vid.currentTime = P.resumeAt; P.resumeAt = 0; P.resumeChecked = true; }
   if (!P.resumeChecked && cfg.resume && P.f) {
     P.resumeChecked = true;
     var p = posMap[P.f.id];
@@ -816,24 +851,47 @@ vid.addEventListener('loadedmetadata', function () {
     }
   }
 });
-vid.addEventListener('timeupdate', function () {
+on('timeupdate', function () {
   if (!dragging && isFinite(vid.duration) && vid.duration) {
     setFill(vid.currentTime / vid.duration);
     $('pCur').textContent = fmt(vid.currentTime);
   }
+  if (vid.currentTime > 0) P.lastTime = vid.currentTime;
   savePos(false);
 });
-vid.addEventListener('progress', function () {
+on('progress', function () {
   try { if (vid.buffered.length && vid.duration) bf.style.width = (vid.buffered.end(vid.buffered.length - 1) / vid.duration * 100) + '%'; } catch (e) {}
 });
-vid.addEventListener('play', function () { $('pPlay').innerHTML = ic('pause'); showUI(); });
-vid.addEventListener('pause', function () { $('pPlay').innerHTML = ic('play'); savePos(true); if (player.className === 'on' && !P.locked) showUI(); });
-vid.addEventListener('waiting', function () { spin(true); });
-vid.addEventListener('playing', function () { spin(false); hideErr(); });
-vid.addEventListener('canplay', function () { spin(false); });
-vid.addEventListener('seeked', function () { spin(false); });
-vid.addEventListener('error', function () { if (vid.getAttribute('src')) showErr(); });
-vid.addEventListener('ended', function () {
+on('play', function () { $('pPlay').innerHTML = ic('pause'); showUI(); });
+on('pause', function () { $('pPlay').innerHTML = ic('play'); savePos(true); if (player.className === 'on' && !P.locked) showUI(); });
+on('waiting', function () { spin(true); });
+on('playing', function () { spin(false); hideErr(); P.retries = 0; });
+on('canplay', function () { spin(false); });
+on('seeked', function () { spin(false); });
+on('error', function (e) {
+  if (e.target !== vid || !vid.getAttribute('src') || !P.f) return;
+  var code = vid.error ? vid.error.code : 0;
+  if (code === 1) return; // aborted by us
+  if ((P.retries || 0) < 3) {
+    P.retries = (P.retries || 0) + 1;
+    spin(true);
+    var f = P.f, t = P.lastTime || posMap[f.id] || 0;
+    setTimeout(function () { if (P.f === f) reloadCurrent(t); }, 700 * P.retries);
+    return;
+  }
+  showErr();
+});
+function reloadCurrent(t) {
+  var keepRetries = P.retries;
+  freshVideo();
+  P.retries = keepRetries; P.resumeAt = t; P.resumeChecked = true;
+  vid.playbackRate = P.rate;
+  vid.src = mediaUrl(P.f.id);
+  vid.load();
+  var pr = vid.play(); if (pr && pr.catch) pr.catch(function () { spin(false); showUI(); });
+  loadSubs(P.f);
+}
+on('ended', function () {
   if (P.f) { delete posMap[P.f.id]; LS.set('pos', posMap); }
   if (!vid.loop && cfg.autoNext && P.i < P.list.length - 1) { toast('Playing next…', 1200); playIdx(P.i + 1); }
   else showUI();
@@ -892,7 +950,7 @@ tapBtn('pSpeed', function () {
   $('pSpeed').textContent = (P.rate % 1 === 0 ? P.rate.toFixed(1) : P.rate) + 'x';
 });
 tapBtn('pLoop', function () {
-  vid.loop = !vid.loop; $('pLoop').className = 'ib' + (vid.loop ? ' act' : ' off');
+  P.loop = !P.loop; vid.loop = P.loop; $('pLoop').className = 'ib' + (vid.loop ? ' act' : ' off');
   toast(vid.loop ? 'Repeat this video: on' : 'Repeat: off');
 });
 tapBtn('pSub', function () { cfg.subs = !cfg.subs; saveCfg(); applySubs(); toast(cfg.subs ? 'Subtitles on' : 'Subtitles off'); });
@@ -1009,6 +1067,14 @@ document.addEventListener('keydown', function (e) {
 
 document.addEventListener('visibilitychange', function () { if (document.hidden) savePos(true); });
 window.addEventListener('pagehide', function () { savePos(true); });
+
+/* ---------- version / update ---------- */
+var APP_VERSION = '4';
+$('verLbl').textContent = APP_VERSION;
+$('updBtn').onclick = function () {
+  $('setMsg').innerHTML = 'Reloading the latest version…';
+  location.replace(location.pathname + '?v=' + Date.now());
+};
 
 /* ---------- start ---------- */
 if (cfg.apiKey && cfg.folders.length) goRoot(); else openSettings();

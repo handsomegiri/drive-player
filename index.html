@@ -111,7 +111,7 @@ h2.sec{font-size:15px;font-weight:600;color:#9a9aa6;padding:16px 16px 8px;letter
 .ptop{position:absolute;top:0;left:0;right:0;display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;padding:8px 10px 30px;padding-top:calc(8px + env(safe-area-inset-top));background:-webkit-linear-gradient(top,rgba(0,0,0,.75),rgba(0,0,0,0));background:linear-gradient(to bottom,rgba(0,0,0,.75),rgba(0,0,0,0));pointer-events:auto}
 .ptop .tt{-webkit-flex:1;flex:1;font-size:17px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 8px}
 .ptop .ib{color:#fff}
-.txtb{min-width:44px;height:44px;padding:0 8px;font-size:15px;font-weight:700;color:#fff;border-radius:22px}
+.txtb{min-width:44px;margin:0 2px;border:1px solid rgba(255,255,255,.35);height:34px;border-radius:17px;padding:0 12px;height:44px;padding:0 8px;font-size:15px;font-weight:700;color:#fff;border-radius:22px}
 .txtb:active{background:rgba(255,255,255,.14)}
 .ib.act{color:#3e91ff}
 .ib.off{opacity:.35}
@@ -217,7 +217,7 @@ video::cue{background:rgba(0,0,0,.6);font-size:22px}
       <button id="pClose" class="ib" aria-label="Close"></button>
       <div id="pTitle" class="tt"></div>
       <button id="pSub" class="ib" aria-label="Subtitles" style="display:none"></button>
-      <button id="pAspect" class="ib" aria-label="Aspect ratio"></button>
+      <button id="pAspect" class="txtb" aria-label="Aspect ratio">Fit</button>
       <button id="pSpeed" class="txtb" aria-label="Speed">1.0x</button>
       <button id="pLoop" class="ib off" aria-label="Repeat"></button>
       <button id="pLock" class="ib" aria-label="Lock"></button>
@@ -641,11 +641,10 @@ $('clearHist').onclick = function () {
 var vid = $('vid'), player = $('player'), ui = $('ui');
 var P = { list: [], i: 0, f: null, folder: null, subs: [], locked: false, scale: 1, bright: cfg.bright, rate: 1, uiOn: true, lastSave: 0, hideT: 0 };
 var RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
-var ASPECTS = [['contain', 'Fit to screen'], ['cover', 'Crop to fill'], ['fill', 'Stretch'], ['none', 'Original size']];
+var ASPECTS = [['contain', 'Fit', 'Fit to screen'], ['cover', 'Fill', 'Fill screen (crops edges)'], ['fill', 'Stretch', 'Stretch to screen'], ['none', '100%', 'Original size']];
 
 $('pClose').innerHTML = ic('back');
 $('pSub').innerHTML = ic('sub');
-$('pAspect').innerHTML = ic('aspect');
 $('pLoop').innerHTML = ic('loop');
 $('pLock').innerHTML = ic('unlock');
 $('lockFloat').innerHTML = ic('lock');
@@ -663,7 +662,7 @@ function openPlayer(list, i, folder, subs) {
   setStepIcons();
   player.className = 'on';
   setBright(cfg.bright);
-  setAspect(cfg.aspect, true);
+  setAspect(0, true);
   P.locked = false; $('lockFloat').className = '';
   var standalone = window.navigator.standalone === true;
   if (!standalone && player.webkitRequestFullscreen) { try { player.webkitRequestFullscreen(); } catch (e) {} }
@@ -857,9 +856,11 @@ function setScale(s) {
   vid.style.webkitTransform = t; vid.style.transform = t;
 }
 function setAspect(i, quiet) {
-  cfg.aspect = i; saveCfg(); setScale(1);
+  P.aspect = i; setScale(1);
   vid.style.objectFit = ASPECTS[i][0];
-  if (!quiet) toast(ASPECTS[i][1]);
+  vid.style.webkitObjectFit = ASPECTS[i][0];
+  $('pAspect').textContent = ASPECTS[i][1];
+  if (!quiet) toast(ASPECTS[i][2]);
 }
 function setLock(on) {
   P.locked = on;
@@ -884,7 +885,7 @@ tapBtn('pPrev', function () {
 });
 tapBtn('pNext', function () { if (P.i < P.list.length - 1) { savePos(true); playIdx(P.i + 1); } });
 tapBtn('pClose', closePlayer);
-tapBtn('pAspect', function () { setAspect((cfg.aspect + 1) % ASPECTS.length); });
+tapBtn('pAspect', function () { setAspect((P.aspect + 1) % ASPECTS.length); });
 tapBtn('pSpeed', function () {
   var i = RATES.indexOf(P.rate); P.rate = RATES[(i + 1) % RATES.length];
   vid.playbackRate = P.rate; vid.defaultPlaybackRate = P.rate;
